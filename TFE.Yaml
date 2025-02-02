@@ -1,0 +1,91 @@
+name: "Terraform"
+
+on:
+  push:
+    branches:
+      - main # Change this if you want to trigger actions on other branches.
+  pull_request: # This triggers the workflow on pull requests.
+
+jobs:
+  terraform:
+    name: "Terraform"
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write # This is necessary for writing comments to pull requests.
+
+    steps:
+      # Step 1: Checkout the code from the repository.
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      # Step 2: Set up Terraform CLI.
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1
+        with:
+          # Specify the desired Terraform version. Uncomment and update if needed.
+          # terraform_version: 1.5.7
+          # Use the Terraform Cloud API token stored as a GitHub secret.
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }} # Add your Terraform Cloud API token in GitHub Secrets.
+
+      # Step 3: Run `terraform fmt` to check for consistent formatting.
+      - name: Terraform Format
+        id: fmt
+        run: terraform fmt -check
+
+      # Step 4: Initialize the Terraform working directory.
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      # Step 5: Validate the Terraform configuration.
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      # Step 6: Run `terraform plan` on pull requests to preview changes.
+      - name: Terraform Plan
+        id: plan
+        if: github.event_name == 'pull_request' # Ensure this runs only for pull requests.
+        run: terraform plan -no-color -input=false
+        continue-on-error: true # Allows the workflow to continue even if the plan fails.
+
+      # Step 7: Update the pull request with Terraform plan details.
+      - name: Update Pull Request
+        uses: actions/github-script@v6
+        if: github.event_name == 'pull_request'
+        env:
+          PLAN: ${{ steps.plan.outputs.stdout }} # Captures the plan output.
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform Format and Style 🖌: \`${{ steps.fmt.outcome }}\`
+            #### Terraform Initialization : \`${{ steps.init.outcome }}\`
+            #### Terraform Validation : \`${{ steps.validate.outcome }}\`
+            #### Terraform Plan : \`${{ steps.plan.outcome }}\`
+
+            <details><summary>Show Plan</summary>
+
+            \`\`\`terraform\n
+            ${process.env.PLAN}
+            \`\`\`
+
+            </details>
+
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+      # Step 8: Exit with an error if the plan fails.
+      - name: Terraform Plan Status
+        if: steps.plan.outcome == 'failure' # Check if the plan failed.
+        run: exit 1
+
+      # Step 9: Apply the Terraform changes on the main branch.
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push' # Runs only on push to the main branch.
+        run: terraform apply -auto-approve -input=false
